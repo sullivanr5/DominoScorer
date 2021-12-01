@@ -6,20 +6,16 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.*
-import android.media.Image
 import android.os.Bundle
 import android.util.Log
-import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.google.mlkit.vision.objects.ObjectDetection
-import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
+import com.robertsullivan.dominoscorer.databinding.ActivityCameraBinding
 import com.robertsullivan.dominoscorer.utils.YuvToRgbConverter
-import kotlinx.android.synthetic.main.activity_camera.*
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.*
@@ -27,9 +23,6 @@ import org.opencv.core.Point
 import org.opencv.imgproc.Imgproc
 import org.opencv.imgproc.Imgproc.Canny
 import org.opencv.imgproc.Imgproc.circle
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -129,6 +122,7 @@ class CameraActivity : AppCompatActivity() {
         }
     }
 
+    private lateinit var binding: ActivityCameraBinding
     private lateinit var cameraExecutor: ExecutorService
 
     private var dotCount: Int = 0
@@ -144,7 +138,10 @@ class CameraActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_camera)
+        binding = ActivityCameraBinding.inflate(layoutInflater)
+        val view = binding.root
+        setContentView(view)
+
         OpenCVLoader.initDebug()
         // Request camera permissions
         if (allPermissionsGranted()) {
@@ -156,7 +153,7 @@ class CameraActivity : AppCompatActivity() {
         }
 
         // Send count back
-        camera_capture_button.setOnClickListener {
+        binding.cameraCaptureButton.setOnClickListener {
             val data = Intent()
             data.putExtra("count", dotCount)
             setResult(Activity.RESULT_OK, data)
@@ -177,7 +174,7 @@ class CameraActivity : AppCompatActivity() {
             val preview = Preview.Builder()
                 .build()
                 .also {
-                    it.setSurfaceProvider(viewFinder.surfaceProvider)
+                    it.setSurfaceProvider(binding.viewFinder.surfaceProvider)
                 }
 
             @androidx.camera.core.ExperimentalGetImage
@@ -188,9 +185,9 @@ class CameraActivity : AppCompatActivity() {
                     it.setAnalyzer(cameraExecutor,
                         DominoAnalyzer(this) { bitmap, numCircles ->
                             runOnUiThread {
-                                imagePreview.setImageBitmap(bitmap)
+                                binding.imagePreview.setImageBitmap(bitmap)
                                 dotCount = numCircles
-                                numberOfDots.text = dotCount.toString()
+                                binding.numberOfDots.text = dotCount.toString()
                             }
 
                         })
@@ -209,7 +206,7 @@ class CameraActivity : AppCompatActivity() {
                     this, cameraSelector, preview, imageAnalyzer
                 )
 
-                flashToggle.setOnClickListener {
+                binding.flashToggle.setOnClickListener {
                     if (camera.cameraInfo.torchState.value == 0) {
                         camera.cameraControl.enableTorch(true)
                     } else camera.cameraControl.enableTorch(false)
