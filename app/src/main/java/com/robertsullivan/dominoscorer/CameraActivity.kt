@@ -1,78 +1,138 @@
 package com.robertsullivan.dominoscorer
 
-import androidx.appcompat.app.AppCompatActivity
-import android.os.Bundle
 import android.Manifest
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.graphics.*
+import android.media.Image
+import android.os.Bundle
 import android.util.Log
+import android.view.View
 import android.widget.Toast
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import java.util.concurrent.Executors
+import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
-import com.google.mlkit.vision.common.InputImage
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.objects.ObjectDetection
 import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
+import com.robertsullivan.dominoscorer.utils.YuvToRgbConverter
 import kotlinx.android.synthetic.main.activity_camera.*
+import org.opencv.android.OpenCVLoader
+import org.opencv.android.Utils
+import org.opencv.core.*
+import org.opencv.core.Point
+import org.opencv.imgproc.Imgproc
+import org.opencv.imgproc.Imgproc.Canny
+import org.opencv.imgproc.Imgproc.circle
 import java.io.File
-import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ExecutorService
-typealias LumaListener = (luma: Double) -> Unit
+import java.util.concurrent.Executors
+
+
+typealias CircleListener = (bitmap: Bitmap, numCircles: Int) -> Unit
 
 class CameraActivity : AppCompatActivity() {
 
-    private class LuminosityAnalyzer(private val listener: LumaListener) : ImageAnalysis.Analyzer {
-
-        private fun ByteBuffer.toByteArray(): ByteArray {
-            rewind()    // Rewind the buffer to zero
-            val data = ByteArray(remaining())
-            get(data)   // Copy the buffer into a byte array
-            return data // Return the byte array
-        }
-
-        override fun analyze(image: ImageProxy) {
-
-            val buffer = image.planes[0].buffer
-            val data = buffer.toByteArray()
-            val pixels = data.map { it.toInt() and 0xFF }
-            val luma = pixels.average()
-
-            listener(luma)
-
-            image.close()
-        }
-    }
-
-    @androidx.camera.core.ExperimentalGetImage
-    private class YourImageAnalyzer : ImageAnalysis.Analyzer {
+    private class DominoAnalyzer(context: Context, private val listener: CircleListener) : ImageAnalysis.Analyzer {
+        private lateinit var bitmapBuffer: Bitmap
+        private var imageRotationDegrees: Int = 0
+        val converter = YuvToRgbConverter(context)
 
         override fun analyze(imageProxy: ImageProxy) {
-            val mediaImage = imageProxy.image
-            if (mediaImage != null) {
-                val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                // Pass image to an ML Kit Vision API
-                // ...
+
+            if (!::bitmapBuffer.isInitialized) {
+                // The image rotation and RGB image buffer are initialized only once
+                // the analyzer has started running
+                imageRotationDegrees = imageProxy.imageInfo.rotationDegrees
+                bitmapBuffer = Bitmap.createBitmap(
+                    imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888
+                )
             }
+
+            // Convert the image to RGB and place it in our shared buffer
+            imageProxy.use {
+                imageProxy.image?.let {
+                    converter.yuvToRgb(it, bitmapBuffer)
+                }
+            }
+            /* convert bitmap to mat */
+            val mat = Mat(
+                bitmapBuffer.width, bitmapBuffer.height,
+                CvType.CV_8UC1
+            )
+            val img = Mat(
+                bitmapBuffer.width, bitmapBuffer.height,
+                CvType.CV_8UC1
+            )
+
+            Utils.bitmapToMat(bitmapBuffer, img)
+
+            // Accumulator value
+            val dp = 1.0
+            // minimum distance between the center coordinates of detected circles in pixels
+            val minDistance = 20.0
+            // param1 = gradient value used to handle edge detection
+            // param2 = Accumulator threshold value for the
+            // cv2.CV_HOUGH_GRADIENT method.
+            // The smaller the threshold is, the more circles will be
+            // detected (including false circles).
+            // The larger the threshold is, the more circles will
+            // potentially be returned.
+            val param1 = 30.0
+            val param2 = 18.0
+            val minRadius = 10
+            val maxRadius = 20
+            val circles = Mat()
+            Imgproc.cvtColor(img, img, Imgproc.COLOR_RGB2GRAY)
+            Imgproc.GaussianBlur(img, img, Size(3.0, 3.0), 1.0)
+            Canny(img, img, 300.0, 500.0)
+            Imgproc.HoughCircles(img, circles, Imgproc.CV_HOUGH_GRADIENT,
+                dp, minDistance, param1, param2, minRadius, maxRadius
+            )
+            Imgproc.cvtColor(img, img, Imgproc.COLOR_GRAY2BGR)
+
+            /* get the number of circles detected */
+            val numberOfCircles = if (circles.rows() == 0) 0 else circles.cols()
+
+            /* draw the circles found on the image */
+            for (i in 0 until numberOfCircles) {
+
+
+                /* get the circle details, circleCoordinates[0, 1, 2] = (x,y,r)
+                 * (x,y) are the coordinates of the circle's center
+                 */
+                val circleCoordinates = circles[0, i]
+                try {
+                    val x = circleCoordinates[0]
+                    val y = circleCoordinates[1]
+                    val center = Point(x, y)
+                    val radius = circleCoordinates[2].toInt()
+
+                    /* circle's outline */
+                    circle(
+                        img, center, radius, Scalar(
+                            0.0,
+                            255.0, 0.0
+                        ), -1
+                    )
+                } catch (e: Exception) {}
+            }
+
+            Utils.matToBitmap(img, bitmapBuffer)
+            listener(bitmapBuffer, numberOfCircles)
+
         }
     }
 
-    val options = ObjectDetectorOptions.Builder()
-        .setDetectorMode(ObjectDetectorOptions.SINGLE_IMAGE_MODE)
-        .enableMultipleObjects()
-        .enableClassification()
-        .build()
-
-    val objectDetector = ObjectDetection.getClient(options)
-
-    private var imageCapture: ImageCapture? = null
-
-    private lateinit var outputDirectory: File
     private lateinit var cameraExecutor: ExecutorService
+
+    private var dotCount: Int = 0
+
 
 
     companion object {
@@ -85,61 +145,25 @@ class CameraActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera)
-
+        OpenCVLoader.initDebug()
         // Request camera permissions
         if (allPermissionsGranted()) {
             startCamera()
         } else {
             ActivityCompat.requestPermissions(
-                this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
+                this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
+            )
         }
 
-        // Set up the listener for take photo button
-        camera_capture_button.setOnClickListener { takePhoto() }
-
-        outputDirectory = getOutputDirectory()
+        // Send count back
+        camera_capture_button.setOnClickListener {
+            val data = Intent()
+            data.putExtra("count", dotCount)
+            setResult(Activity.RESULT_OK, data)
+            finish()
+        }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
-    }
-
-    private fun takePhoto() {
-        // Get a stable reference of the modifiable image capture use case
-        val imageCapture = imageCapture ?: return
-
-        // Create time-stamped output file to hold the image
-        val photoFile = File(
-            outputDirectory,
-            SimpleDateFormat(FILENAME_FORMAT, Locale.US
-            ).format(System.currentTimeMillis()) + ".jpg")
-
-        // Create output options object which contains file + metadata
-        val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
-
-        // Set up image capture listener, which is triggered after photo has
-        // been taken
-//        @androidx.camera.core.ExperimentalGetImage
-        imageCapture.takePicture(ContextCompat.getMainExecutor(this), object : ImageCapture.OnImageCapturedCallback() {
-                override fun onError(exc: ImageCaptureException) {
-                    Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
-                }
-
-            override fun onCaptureSuccess(imageProxy: ImageProxy) {
-                super.onCaptureSuccess(imageProxy)
-                @androidx.camera.core.ExperimentalGetImage
-                val mediaImage = imageProxy.image
-                if (mediaImage != null) {
-                    val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                    objectDetector.process(image)
-                        .addOnSuccessListener { detectedObjects ->
-                            println(detectedObjects)
-                            imageProxy.close()
-                        }
-                        .addOnFailureListener { e ->
-                            println("error: $e")
-                        }
-                }
-            }
-            })
     }
 
     private fun startCamera() {
@@ -156,15 +180,20 @@ class CameraActivity : AppCompatActivity() {
                     it.setSurfaceProvider(viewFinder.surfaceProvider)
                 }
 
-            imageCapture = ImageCapture.Builder()
-                .build()
-
+            @androidx.camera.core.ExperimentalGetImage
             val imageAnalyzer = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
-                    it.setAnalyzer(cameraExecutor, LuminosityAnalyzer { luma ->
-                        Log.d(TAG, "Average luminosity: $luma")
-                    })
+                    it.setAnalyzer(cameraExecutor,
+                        DominoAnalyzer(this) { bitmap, numCircles ->
+                            runOnUiThread {
+                                imagePreview.setImageBitmap(bitmap)
+                                dotCount = numCircles
+                                numberOfDots.text = dotCount.toString()
+                            }
+
+                        })
                 }
 
             // Select back camera as a default
@@ -175,10 +204,18 @@ class CameraActivity : AppCompatActivity() {
                 cameraProvider.unbindAll()
 
                 // Bind use cases to camera
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture)
+                @androidx.camera.core.ExperimentalGetImage
+                val camera = cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, imageAnalyzer
+                )
 
-            } catch(exc: Exception) {
+                flashToggle.setOnClickListener {
+                    if (camera.cameraInfo.torchState.value == 0) {
+                        camera.cameraControl.enableTorch(true)
+                    } else camera.cameraControl.enableTorch(false)
+                }
+
+            } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
             }
 
@@ -187,14 +224,8 @@ class CameraActivity : AppCompatActivity() {
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
         ContextCompat.checkSelfPermission(
-            baseContext, it) == PackageManager.PERMISSION_GRANTED
-    }
-
-    private fun getOutputDirectory(): File {
-        val mediaDir = externalMediaDirs.firstOrNull()?.let {
-            File(it, resources.getString(R.string.app_name)).apply { mkdirs() } }
-        return if (mediaDir != null && mediaDir.exists())
-            mediaDir else filesDir
+            baseContext, it
+        ) == PackageManager.PERMISSION_GRANTED
     }
 
     override fun onDestroy() {
@@ -204,14 +235,18 @@ class CameraActivity : AppCompatActivity() {
 
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<String>, grantResults:
-        IntArray) {
+        IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
                 startCamera()
             } else {
-                Toast.makeText(this,
+                Toast.makeText(
+                    this,
                     "Permissions not granted by the user.",
-                    Toast.LENGTH_SHORT).show()
+                    Toast.LENGTH_SHORT
+                ).show()
                 finish()
             }
         }

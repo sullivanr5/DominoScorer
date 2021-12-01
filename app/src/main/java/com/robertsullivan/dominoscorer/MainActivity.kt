@@ -1,30 +1,28 @@
 package com.robertsullivan.dominoscorer
 
+import android.app.Activity
 import android.content.Intent
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
-import com.google.mlkit.vision.objects.ObjectDetection
-import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
+import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import kotlinx.android.synthetic.main.activity_main.*
 
 class MainActivity : AppCompatActivity() {
+
+    private var resultLauncher = registerForActivityResult(StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            countTextView.text = result.data?.getIntExtra("count", 0).toString()
+        }
+
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         openCameraButton.setOnClickListener {
-            startActivityForResult(Intent(this, CameraActivity::class.java), 0)
+            resultLauncher.launch(Intent(this, CameraActivity::class.java))
         }
 
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        when(requestCode) {
-            0 -> {
-
-            }
-        }
     }
 }
